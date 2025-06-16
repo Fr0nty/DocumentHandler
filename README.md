@@ -1,7 +1,7 @@
 # DocumentHandler
 
-Firstly you need to install Ollama on your local machine form this site: https://ollama.com/
-This will serve as the interpreter of the documents. Once it has finished installing run the command it shows in the cmd to install the first llm (llama3.2)
+Firstly you need to install Ollama on your local machine form this site: https://ollama.com/ \n
+This will serve as the interpreter of the documents. Once it has finished installing run the command it shows in the cmd to install the first llm (llama3.2). For more details about using Ollama you can check out their official readme here: https://github.com/ollama/ollama/blob/main/README.md \n
 You can install more powerful models but make sure you have enough space available:
 
 | Model                | Parameters | Size   | Download                         |
