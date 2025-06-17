@@ -1,76 +1,132 @@
-import glob
 import os
-from modules.file_reader import read_pdf_files, read_word_files
-from modules.file_writer import fill_template
-from modules.ollama_integration import ollama_query
-from modules.template_selector import list_templates
+import PyPDF2
+from docx import Document
+import requests  # For interacting with Ollama server
+import shutil
+
+# Ollama config
+OLLAMA_URL = "http://localhost:9000/api/completion"  # Replace with your local Ollama server URL
+MODEL_NAME = "llama3.2"
+
+
+def extract_pdf_text(file_path):
+    """Extracts text from the given PDF file."""
+    text = ""
+    with open(file_path, "rb") as pdf_file:
+        reader = PyPDF2.PdfReader(pdf_file)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    return text
+
+
+def load_template(template_path):
+    """Loads the text/template from the Word document."""
+    doc = Document(template_path)
+    template_text = "\n".join([p.text for p in doc.paragraphs])
+    return template_text
+
+
+def transform_text_via_ollama(input_text, template_text, translate_to=None):
+    """
+    Perform transformation using Ollama (local model).
+    - input_text: content from the old PDF
+    - template_text: structure/format from the Word document
+    - translate_to: optional target language (e.g., Romanian)
+    """
+    prompt = f"""
+    Rewrite the following content to match the format below:
+    ---
+    Content:
+    {input_text}
+    ---
+    Format:
+    {template_text}
+    ---
+    {"Translate this content into " + translate_to + " after matching the format." if translate_to else ""}
+    """
+    
+    # Making a POST request to the local Ollama server
+    payload = {
+        "model": MODEL_NAME,  # Specify the model name
+        "prompt": prompt
+    }
+    try:
+        response = requests.post(OLLAMA_URL, json=payload)
+        response.raise_for_status()  # Raise an error for issues with the request
+        return response.json().get("response", "").strip()
+    except requests.exceptions.RequestException as e:
+        print(f"Error during Ollama processing: {e}")
+        return None
+
+
+def save_to_word(transformed_text, output_path):
+    """Saves transformed text to a Word document."""
+    doc = Document()
+    for line in transformed_text.split("\n"):
+        doc.add_paragraph(line)
+    doc.save(output_path)
 
 
 def main():
-    print("Welcome to the Engineering Documentation Assistant!")
-    print("Please select a task:")
-    print("1. Language Translation")
-    print("2. Grammar Check")
-    print("3. Document Auto-Completion")
+    # Folders
+    data_folder = "data"
+    templates_folder = "templates"
+    output_folder = "output"
+    
+    # Ensure output folder exists
+    os.makedirs(output_folder, exist_ok=True)
 
-    # Prompt user to choose a task
-    choice = input("Enter your choice (1/2/3): ")
-
-    # Prompt the user for file type and folder path
-    file_type = input("Are your input files PDF or Word documents? (Enter 'pdf' or 'docx'): ").lower()
-    folder_path = input("Enter the folder path containing the input files: ")
-
-    if file_type == "pdf":
-        # Collect all PDFs in the folder and read their text
-        input_files = glob.glob(f"{folder_path}/*.pdf")
-        if not input_files:
-            print("No PDF files found in the folder.")
-            return
-        combined_text = read_pdf_files(input_files)
-    elif file_type == "docx":
-        # Collect all Word files in the folder and read their text
-        input_files = glob.glob(f"{folder_path}/*.docx")
-        if not input_files:
-            print("No Word files found in the folder.")
-            return
-        combined_text = read_word_files(input_files)
-    else:
-        print("Unsupported file type.")
+    # User interaction (basic for CLI)
+    print("Welcome to the Documentation Formatter App!")
+    
+    # Step 1: Select PDF file
+    pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
+    if not pdf_files:
+        print("No PDF files found in the data directory.")
         return
-
-    # Action based on user selection
-    if choice == "1":  # Language Translation
-        language = input("Enter target language for translation (e.g., en, es, fr): ")
-        prompt = f"Translate this text to {language}:\n{combined_text}"
-        result = ollama_query(prompt)
-        print("Translation Result:\n", result)
-    elif choice == "2":  # Grammar Check
-        prompt = f"Check and correct grammar for this text:\n{combined_text}"
-        result = ollama_query(prompt)
-        print("Grammar Check Result:\n", result)
-    elif choice == "3":  # Document Auto-Completion
-        template_folder = "templates"
-        templates = list_templates(template_folder)  # Dynamically list templates
-        template_choice = int(input("Select a template by number: "))
-        template_path = os.path.join(template_folder, templates[template_choice - 1])  # Get template path
-
-        output_path = input("Enter the path to save your completed document (e.g., output.docx): ")
-        
-        # Collect placeholders and values
-        placeholders = {}
-        print("Enter placeholders and values (type 'done' to finish):")
-        while True:
-            placeholder = input("Placeholder (e.g., {NAME}): ")
-            if placeholder.lower() == 'done':
-                break
-            value = input("Value: ")
-            placeholders[placeholder] = value
-
-        # Fill placeholders in the selected template
-        fill_template(template_path, output_path, placeholders)
-        print(f"Document has been saved to {output_path}.")
-    else:
-        print("Invalid choice.")
+    
+    print("Available PDF files:")
+    for idx, file in enumerate(pdf_files):
+        print(f"{idx + 1}. {file}")
+    
+    pdf_choice = int(input("Choose a PDF file by number: ")) - 1
+    pdf_path = os.path.join(data_folder, pdf_files[pdf_choice])
+    
+    # Step 2: Select Template
+    template_files = [f for f in os.listdir(templates_folder) if f.endswith(".docx")]
+    if not template_files:
+        print("No template files found in the templates directory.")
+        return
+    
+    print("\nAvailable Templates:")
+    for idx, file in enumerate(template_files):
+        print(f"{idx + 1}. {file}")
+    
+    template_choice = int(input("Choose a template by number: ")) - 1
+    template_path = os.path.join(templates_folder, template_files[template_choice])
+    
+    # Step 3: Transformation Type
+    transform_choice = input("\nDo you want to translate the document? (y/n): ").strip().lower()
+    translate_to = None
+    if transform_choice == "y":
+        translate_to = input("Enter the target language (e.g., Romanian): ").strip()
+    
+    # Process
+    print("\nProcessing...")
+    pdf_text = extract_pdf_text(pdf_path)
+    template_text = load_template(template_path)
+    transformed_text = transform_text_via_ollama(pdf_text, template_text, translate_to)
+    
+    if not transformed_text:
+        print("Transformation failed.")
+        return
+    
+    # Save output
+    output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.docx"
+    output_path = os.path.join(output_folder, output_file)
+    save_to_word(transformed_text, output_path)
+    
+    print(f"\nDocument has been reformatted and saved to {output_path}")
 
 
 if __name__ == "__main__":
