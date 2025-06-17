@@ -1,7 +1,7 @@
 # DocumentHandler
-
-Firstly you need to install Ollama on your local machine form this site: https://ollama.com/ \n
-This will serve as the interpreter of the documents. Once it has finished installing run the command it shows in the cmd to install the first llm (llama3.2). For more details about using Ollama you can check out their official readme here: https://github.com/ollama/ollama/blob/main/README.md \n
+## Installing Ollama
+Firstly you need to install Ollama on your local machine form this site: https://ollama.com/ <br>
+This will serve as the interpreter of the documents. Once it has finished installing run the command it shows in the cmd to install the first llm (llama3.2). For more details about using Ollama you can check out their official readme here: https://github.com/ollama/ollama/blob/main/README.md <br>
 You can install more powerful models but make sure you have enough space available:
 
 | Model                | Parameters | Size   | Download                         |
@@ -32,3 +32,7 @@ You can install more powerful models but make sure you have enough space availab
 | Llama 2 Uncensored  | 7B         | 3.8GB  | `ollama run llama2-uncensored`   |
 | LLaVA               | 7B         | 4.5GB  | `ollama run llava`               |
 | Granite-3.3         | 8B         | 4.9GB  | `ollama run granite3.3`          |
+
+## Setting up for usage
+After you have installed the program you girst need to update the data folder and the template folder. <br>
+The data folder will see your inputs, meaning the files that need to be processed, while the template folder will act as the place for setting up how you want that data to be processed.
