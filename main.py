@@ -2,10 +2,10 @@ import os
 import PyPDF2
 from docx import Document
 import requests  # For interacting with Ollama server
-import shutil
+import json
 
 # Ollama config
-OLLAMA_URL = "http://localhost:9000/api/completion"  # Replace with your local Ollama server URL
+endpoint = "http://localhost:11434/api/generate"  # Replace with your local Ollama server URL
 MODEL_NAME = "llama3.2"
 
 
@@ -22,7 +22,9 @@ def extract_pdf_text(file_path):
 def load_template(template_path):
     """Loads the text/template from the Word document."""
     doc = Document(template_path)
-    template_text = "\n".join([p.text for p in doc.paragraphs])
+    template_text=""
+    for paragraph in doc.paragraphs:
+        template_text += paragraph.text + "\n"
     return template_text
 
 
@@ -34,7 +36,9 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
     - translate_to: optional target language (e.g., Romanian)
     """
     prompt = f"""
-    Rewrite the following content to match the format below:
+    Rewrite the following content to match the format below, without changing the information from the content.
+    If there is too much content to be processed directly, split it into paragraphs.
+    After you are done with each paragraph, try to mimic the format of the template text and paste the rewritten format in the new document
     ---
     Content:
     {input_text}
@@ -50,10 +54,25 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
         "model": MODEL_NAME,  # Specify the model name
         "prompt": prompt
     }
+    print(f"Payload: {payload}")
     try:
-        response = requests.post(OLLAMA_URL, json=payload)
-        response.raise_for_status()  # Raise an error for issues with the request
-        return response.json().get("response", "").strip()
+        response = requests.post(endpoint, json=payload)
+        print(f"Raw response: {response.text}")  # Debugging statement to inspect the response
+        response.raise_for_status()  # Raise HTTP errors
+        full_response_data = ""
+        for chunk in response.iter_lines():
+            if chunk:
+                try:
+                    # Attempt to parse each chunk as JSON
+                    chunk_data = json.loads(chunk.decode("utf-8"))
+                    full_response_data += chunk_data.get("response", "")
+                    if chunk_data.get("done", False):  # Stop if 'done' is true
+                        break
+                except json.JSONDecodeError as e:
+                    print(f"Failed to decode chunk: {e}")
+        
+        # Return the full assembled response
+        return full_response_data.strip()
     except requests.exceptions.RequestException as e:
         print(f"Error during Ollama processing: {e}")
         return None
