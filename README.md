@@ -36,3 +36,9 @@ You can install more powerful models but make sure you have enough space availab
 ## Setting up for usage
 After you have installed the program you girst need to update the data folder and the template folder. <br>
 The data folder will see your inputs, meaning the files that need to be processed, while the template folder will act as the place for setting up how you want that data to be processed.
+
+## Issues and how to overcome
+After testing a couple of documents, I have come to find that formatting the word document after reading the pdf can't be done by Ollama models alone, so in order to fix this issue there are 3 options:<br>
+Either use openxml-sdk with c# to preprocess the files and load up the template in an better manner.<br>
+Or use an OCR to scan the document, extracting just the relevant text, feeding it into the models and then rewrite it into the code.<br>
+Make an ensemble of the other 2 in order to make a foolproof result that will probably never need to be changed again.
