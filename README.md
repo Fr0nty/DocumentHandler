@@ -38,7 +38,4 @@ After you have installed the program you girst need to update the data folder an
 The data folder will see your inputs, meaning the files that need to be processed, while the template folder will act as the place for setting up how you want that data to be processed.
 
 ## Issues and how to overcome
-After testing a couple of documents, I have come to find that formatting the word document after reading the pdf can't be done by Ollama models alone, so in order to fix this issue there are 3 options:<br>
-Either use openxml-sdk with c# to preprocess the files and load up the template in an better manner.<br>
-Or use an OCR to scan the document, extracting just the relevant text, feeding it into the models and then rewrite it into the code.<br>
-Make an ensemble of the other 2 in order to make a foolproof result that will probably never need to be changed again.
+After adressing the previous issues, the code works both on translation and grammar fixing, now the real challenge is to make it rewrite it into the specific template format, there might be need for additional processing by a multi modal model like llava to realize the paper layout with both the figures and tables, as well as the text positioning, remains to be tested and seen what solution might work.

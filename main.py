@@ -6,8 +6,9 @@ import json
 
 # Ollama config
 endpoint = "http://localhost:11434/api/generate"  # Replace with your local Ollama server URL
-MODEL_NAME = "llama3.2"
-
+MODEL_NAME = "mistral"
+MAX_TOKENS = 6000
+CHARACTER_LIMIT = 24000  # Roughly for ~6000 tokens
 
 def extract_pdf_text(file_path):
     """Extracts text from the given PDF file."""
@@ -28,26 +29,22 @@ def load_template(template_path):
     return template_text
 
 
-def transform_text_via_ollama(input_text, template_text, translate_to=None):
+def transform_text_via_ollama(input_text, translate_to=None):
     """
     Perform transformation using Ollama (local model).
     - input_text: content from the old PDF
-    - template_text: structure/format from the Word document
     - translate_to: optional target language (e.g., Romanian)
     """
     prompt = f"""
-    Rewrite the following content to match the format below, without changing the information from the content.
-    Maintain as much of the original context as possible.
+    Correct the grammar and improve the clarity of the following text.
+    If needed, translate this content into {translate_to}:
+    Write only the final version after you make all the changes, if the content is translated in {translate_to}, write only the translation.
     ---
     Content:
     {input_text}
     ---
-    Format:
-    {template_text}
-    ---
-    {"Translate this content into " + translate_to + " if needed or correct the grammar." if translate_to else "Correct the grammar if needed."}
     """
-
+    
     # Making a POST request to the local Ollama server
     payload = {
         "model": MODEL_NAME,  # Specify the model name
@@ -77,10 +74,19 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
         return None
 
 
-def save_to_word(transformed_text, output_path):
-    """Saves transformed text to a Word document."""
+def apply_template(transformed_text, template_text):
+    """
+    Apply the template to the transformed text.
+    - transformed_text: fully processed document text
+    - template_text: structure/format from the Word document
+    """
+    return f"{template_text}\n\n{transformed_text}"
+
+
+def save_to_word(final_text, output_path):
+    """Saves the final text to a Word document."""
     doc = Document()
-    for line in transformed_text.split("\n"):
+    for line in final_text.split("\n"):
         doc.add_paragraph(line)
     doc.save(output_path)
 
@@ -134,26 +140,38 @@ def main():
     pdf_text = extract_pdf_text(pdf_path)
     template_text = load_template(template_path)
 
-    # Break the text into larger chunks (for example, each page or 3-5 paragraphs each)
+    # Break the text into manageable chunks with respect to the CHARACTER_LIMIT
     paragraphs = pdf_text.strip().split("\n")
-    chunk_size = 5  # For example, 5 paragraphs per chunk
-    chunks = ['\n'.join(paragraphs[i:i + chunk_size]) for i in range(0, len(paragraphs), chunk_size)]
+    full_transformed_text = ""
+    
+    current_chunk = ""
+    
+    for paragraph in paragraphs:
+        if len(current_chunk) + len(paragraph) + 1 < CHARACTER_LIMIT:
+            current_chunk += paragraph + "\n"  # Add paragraph and keep it for current chunk
+        else:
+            # Process the current chunk if it's not empty
+            if current_chunk.strip():  # Process current chunk only if it's not empty
+                transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
+                if transformed_chunk:
+                    full_transformed_text += transformed_chunk + "\n"  # Append the transformed text
 
-    transformed_texts = []
-
-    for chunk in chunks:
-        if chunk.strip():  # Skip empty chunks
-            transformed_chunk = transform_text_via_ollama(chunk, template_text, translate_to)
-            if transformed_chunk:
-                transformed_texts.append(transformed_chunk)
-
-    # Combine the transformed text
-    final_transformed_text = "\n".join(transformed_texts)
+            # Start a new chunk with the current paragraph
+            current_chunk = paragraph + "\n"
+    
+    # Process any remaining content in the last chunk
+    if current_chunk.strip():
+        transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
+        if transformed_chunk:
+            full_transformed_text += transformed_chunk + "\n"
+    
+    # Apply the template finally
+    final_document = apply_template(full_transformed_text, template_text)
 
     # Save output
     output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.docx"
     output_path = os.path.join(output_folder, output_file)
-    save_to_word(final_transformed_text, output_path)
+    save_to_word(final_document, output_path)
     
     print(f"\nDocument has been reformatted and saved to {output_path}")
 
