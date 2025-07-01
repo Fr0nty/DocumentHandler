@@ -1,7 +1,7 @@
 import os
 import PyPDF2
 from docx import Document
-import requests  # For interacting with Ollama server
+import requests  # For interacting with the Ollama server
 import json
 
 # Ollama config
@@ -22,7 +22,7 @@ def extract_pdf_text(file_path):
 def load_template(template_path):
     """Loads the text/template from the Word document."""
     doc = Document(template_path)
-    template_text=""
+    template_text = ""
     for paragraph in doc.paragraphs:
         template_text += paragraph.text + "\n"
     return template_text
@@ -37,8 +37,7 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
     """
     prompt = f"""
     Rewrite the following content to match the format below, without changing the information from the content.
-    If there is too much content to be processed directly, split it into paragraphs.
-    After you are done with each paragraph, try to mimic the format of the template text and paste the rewritten format in the new document
+    Maintain as much of the original context as possible.
     ---
     Content:
     {input_text}
@@ -46,9 +45,9 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
     Format:
     {template_text}
     ---
-    {"Translate this content into " + translate_to + " after matching the format." if translate_to else ""}
+    {"Translate this content into " + translate_to + " if needed or correct the grammar." if translate_to else "Correct the grammar if needed."}
     """
-    
+
     # Making a POST request to the local Ollama server
     payload = {
         "model": MODEL_NAME,  # Specify the model name
@@ -70,7 +69,7 @@ def transform_text_via_ollama(input_text, template_text, translate_to=None):
                         break
                 except json.JSONDecodeError as e:
                     print(f"Failed to decode chunk: {e}")
-        
+
         # Return the full assembled response
         return full_response_data.strip()
     except requests.exceptions.RequestException as e:
@@ -134,16 +133,27 @@ def main():
     print("\nProcessing...")
     pdf_text = extract_pdf_text(pdf_path)
     template_text = load_template(template_path)
-    transformed_text = transform_text_via_ollama(pdf_text, template_text, translate_to)
-    
-    if not transformed_text:
-        print("Transformation failed.")
-        return
-    
+
+    # Break the text into larger chunks (for example, each page or 3-5 paragraphs each)
+    paragraphs = pdf_text.strip().split("\n")
+    chunk_size = 5  # For example, 5 paragraphs per chunk
+    chunks = ['\n'.join(paragraphs[i:i + chunk_size]) for i in range(0, len(paragraphs), chunk_size)]
+
+    transformed_texts = []
+
+    for chunk in chunks:
+        if chunk.strip():  # Skip empty chunks
+            transformed_chunk = transform_text_via_ollama(chunk, template_text, translate_to)
+            if transformed_chunk:
+                transformed_texts.append(transformed_chunk)
+
+    # Combine the transformed text
+    final_transformed_text = "\n".join(transformed_texts)
+
     # Save output
     output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.docx"
     output_path = os.path.join(output_folder, output_file)
-    save_to_word(transformed_text, output_path)
+    save_to_word(final_transformed_text, output_path)
     
     print(f"\nDocument has been reformatted and saved to {output_path}")
 
