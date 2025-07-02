@@ -39,3 +39,7 @@ The data folder will see your inputs, meaning the files that need to be processe
 
 ## Issues and how to overcome
 After adressing the previous issues, the code works both on translation and grammar fixing, now the real challenge is to make it rewrite it into the specific template format, there might be need for additional processing by a multi modal model like llava to realize the paper layout with both the figures and tables, as well as the text positioning, remains to be tested and seen what solution might work.
+
+## Other branches
+I made another branch that I will treat a little different, instead of writing the text directly in the word after the llm process it, I will process it in a Json and try to split it into 4 main components: header, main text, table, figure.<br>
+After this split is done, I will try and use the python that handles word documents in order to make a more correct template setup. It may not be possible to copy paste figures and images from the text, that would be the only issue, but I am sure I can find another solution for this problem.

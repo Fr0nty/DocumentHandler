@@ -1,8 +1,7 @@
 import os
 import PyPDF2
-from docx import Document
-import requests  # For interacting with the Ollama server
 import json
+import requests  # For interacting with the Ollama server
 
 # Ollama config
 endpoint = "http://localhost:11434/api/generate"  # Replace with your local Ollama server URL
@@ -18,16 +17,6 @@ def extract_pdf_text(file_path):
         for page in reader.pages:
             text += page.extract_text() + "\n"
     return text
-
-
-def load_template(template_path):
-    """Loads the text/template from the Word document."""
-    doc = Document(template_path)
-    template_text = ""
-    for paragraph in doc.paragraphs:
-        template_text += paragraph.text + "\n"
-    return template_text
-
 
 def transform_text_via_ollama(input_text, translate_to=None):
     """
@@ -50,10 +39,8 @@ def transform_text_via_ollama(input_text, translate_to=None):
         "model": MODEL_NAME,  # Specify the model name
         "prompt": prompt
     }
-    print(f"Payload: {payload}")
     try:
         response = requests.post(endpoint, json=payload)
-        print(f"Raw response: {response.text}")  # Debugging statement to inspect the response
         response.raise_for_status()  # Raise HTTP errors
         full_response_data = ""
         for chunk in response.iter_lines():
@@ -64,8 +51,8 @@ def transform_text_via_ollama(input_text, translate_to=None):
                     full_response_data += chunk_data.get("response", "")
                     if chunk_data.get("done", False):  # Stop if 'done' is true
                         break
-                except json.JSONDecodeError as e:
-                    print(f"Failed to decode chunk: {e}")
+                except json.JSONDecodeError:
+                    pass
 
         # Return the full assembled response
         return full_response_data.strip()
@@ -73,34 +60,19 @@ def transform_text_via_ollama(input_text, translate_to=None):
         print(f"Error during Ollama processing: {e}")
         return None
 
-
-def apply_template(transformed_text, template_text):
-    """
-    Apply the template to the transformed text.
-    - transformed_text: fully processed document text
-    - template_text: structure/format from the Word document
-    """
-    return f"{template_text}\n\n{transformed_text}"
-
-
-def save_to_word(final_text, output_path):
-    """Saves the final text to a Word document."""
-    doc = Document()
-    for line in final_text.split("\n"):
-        doc.add_paragraph(line)
-    doc.save(output_path)
-
+def save_to_json(data, output_path):
+    """Saves the data to a JSON file."""
+    with open(output_path, "w", encoding='utf-8') as json_file:
+        json.dump(data, json_file, ensure_ascii=False, indent=4)
 
 def main():
     # Folders
     data_folder = "data"
-    templates_folder = "templates"
     output_folder = "output"
     
     # Ensure output folder exists
     os.makedirs(output_folder, exist_ok=True)
 
-    # User interaction (basic for CLI)
     print("Welcome to the Documentation Formatter App!")
     
     # Step 1: Select PDF file
@@ -116,20 +88,7 @@ def main():
     pdf_choice = int(input("Choose a PDF file by number: ")) - 1
     pdf_path = os.path.join(data_folder, pdf_files[pdf_choice])
     
-    # Step 2: Select Template
-    template_files = [f for f in os.listdir(templates_folder) if f.endswith(".docx")]
-    if not template_files:
-        print("No template files found in the templates directory.")
-        return
-    
-    print("\nAvailable Templates:")
-    for idx, file in enumerate(template_files):
-        print(f"{idx + 1}. {file}")
-    
-    template_choice = int(input("Choose a template by number: ")) - 1
-    template_path = os.path.join(templates_folder, template_files[template_choice])
-    
-    # Step 3: Transformation Type
+    # Step 2: Transformation Type
     transform_choice = input("\nDo you want to translate the document? (y/n): ").strip().lower()
     translate_to = None
     if transform_choice == "y":
@@ -138,43 +97,38 @@ def main():
     # Process
     print("\nProcessing...")
     pdf_text = extract_pdf_text(pdf_path)
-    template_text = load_template(template_path)
 
-    # Break the text into manageable chunks with respect to the CHARACTER_LIMIT
+    # Categorize the text
+    categorized_data = {
+        "header": [],
+        "main text": [],
+        "figure": [],
+        "table": []
+    }
+
+    # Simple heuristic to categorize the text
     paragraphs = pdf_text.strip().split("\n")
-    full_transformed_text = ""
-    
-    current_chunk = ""
-    
+    current_category = "main text"  # Default
+
     for paragraph in paragraphs:
-        if len(current_chunk) + len(paragraph) + 1 < CHARACTER_LIMIT:
-            current_chunk += paragraph + "\n"  # Add paragraph and keep it for current chunk
-        else:
-            # Process the current chunk if it's not empty
-            if current_chunk.strip():  # Process current chunk only if it's not empty
-                transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
-                if transformed_chunk:
-                    full_transformed_text += transformed_chunk + "\n"  # Append the transformed text
+        if paragraph.strip().startswith("Pagina"):
+            current_category = "header"
+        elif "Tabelul" in paragraph or "Cerinte" in paragraph:
+            current_category = "table"
+        elif any(figure_keyword in paragraph for figure_keyword in ["Figura", "Photo", "Figure", "Baldovineti"]):
+            current_category = "figure"
 
-            # Start a new chunk with the current paragraph
-            current_chunk = paragraph + "\n"
-    
-    # Process any remaining content in the last chunk
-    if current_chunk.strip():
-        transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
-        if transformed_chunk:
-            full_transformed_text += transformed_chunk + "\n"
-    
-    # Apply the template finally
-    final_document = apply_template(full_transformed_text, template_text)
+        # Transform the text
+        transformed_paragraph = transform_text_via_ollama(paragraph, translate_to)
+        if transformed_paragraph:
+            categorized_data[current_category].append(transformed_paragraph)
 
-    # Save output
-    output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.docx"
+    # Save output to JSON
+    output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.json"
     output_path = os.path.join(output_folder, output_file)
-    save_to_word(final_document, output_path)
+    save_to_json(categorized_data, output_path)
     
     print(f"\nDocument has been reformatted and saved to {output_path}")
-
 
 if __name__ == "__main__":
     main()
