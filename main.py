@@ -1,47 +1,48 @@
 import os
-import PyPDF2
+import pdfplumber
 import json
 import requests  # For interacting with the Ollama server
 
 # Ollama config
 endpoint = "http://localhost:11434/api/generate"  # Replace with your local Ollama server URL
 MODEL_NAME = "mistral"
-MAX_TOKENS = 6000
 CHARACTER_LIMIT = 24000  # Roughly for ~6000 tokens
+BATCH_SIZE = 5  # Number of paragraphs to process in each batch
 
 def extract_pdf_text(file_path):
     """Extracts text from the given PDF file."""
     text = ""
-    with open(file_path, "rb") as pdf_file:
-        reader = PyPDF2.PdfReader(pdf_file)
-        for page in reader.pages:
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
             text += page.extract_text() + "\n"
     return text
 
-def transform_text_via_ollama(input_text, translate_to=None):
+def transform_text_via_ollama(batch_text, translate_to=None):
     """
-    Perform transformation using Ollama (local model).
-    - input_text: content from the old PDF
+    Perform transformation using Ollama (local model) in batches.
+    - batch_text: combined content from the PDF
     - translate_to: optional target language (e.g., Romanian)
     """
     prompt = f"""
-    Correct the grammar and improve the clarity of the following text.
-    If needed, translate this content into {translate_to}:
+    Correct the grammar and improve the clarity of the following text, don't try to summarize the text, keep every part of it, reformulate only when absolutely necessary.
+    Detect in what language this content was written and don't try to change this.
     Write only the final version after you make all the changes, if the content is translated in {translate_to}, write only the translation.
     ---
     Content:
-    {input_text}
+    {batch_text}
     ---
     """
     
     # Making a POST request to the local Ollama server
     payload = {
-        "model": MODEL_NAME,  # Specify the model name
+        "model": MODEL_NAME,
         "prompt": prompt
     }
+    
     try:
         response = requests.post(endpoint, json=payload)
         response.raise_for_status()  # Raise HTTP errors
+        
         full_response_data = ""
         for chunk in response.iter_lines():
             if chunk:
@@ -97,31 +98,42 @@ def main():
     # Process
     print("\nProcessing...")
     pdf_text = extract_pdf_text(pdf_path)
+    print(f"Extracted text from {pdf_files[pdf_choice]}:\n{pdf_text[:500]}...\n")  # Display first 500 chars
 
     # Categorize the text
     categorized_data = {
-        "header": [],
         "main text": [],
-        "figure": [],
         "table": []
     }
 
-    # Simple heuristic to categorize the text
+    # Split text into paragraphs
     paragraphs = pdf_text.strip().split("\n")
-    current_category = "main text"  # Default
+    batch = []
 
+    # Process paragraphs in batches
     for paragraph in paragraphs:
-        if paragraph.strip().startswith("Pagina"):
-            current_category = "header"
-        elif "Tabelul" in paragraph or "Cerinte" in paragraph:
-            current_category = "table"
-        elif any(figure_keyword in paragraph for figure_keyword in ["Figura", "Photo", "Figure", "Baldovineti"]):
-            current_category = "figure"
+        if "Tabelul" in paragraph or "Cerinte" in paragraph:
+            categorized_data["table"].append(paragraph)  # Add directly to tables
+            print(f"Categorizing as table: {paragraph}")
+        else:
+            batch.append(paragraph)  # Add to batch for main text
+        
+        # Process the batch when it reaches the specified size
+        if len(batch) >= BATCH_SIZE:
+            batch_text = "\n".join(batch)  # Join the paragraphs into a single batch
+            print(f"Transforming main text batch:\n{batch_text[:100]}...\n")  # Preview first 100 chars of the batch
+            transformed_batch = transform_text_via_ollama(batch_text, translate_to)
+            if transformed_batch:
+                categorized_data["main text"].append(transformed_batch)
+            batch = []  # Reset the batch
 
-        # Transform the text
-        transformed_paragraph = transform_text_via_ollama(paragraph, translate_to)
-        if transformed_paragraph:
-            categorized_data[current_category].append(transformed_paragraph)
+    # Process any remaining paragraphs in the last batch
+    if batch:
+        batch_text = "\n".join(batch)
+        print(f"Transforming final main text batch:\n{batch_text[:100]}...\n")  # Preview first 100 chars of the last batch
+        transformed_batch = transform_text_via_ollama(batch_text, translate_to)
+        if transformed_batch:
+            categorized_data["main text"].append(transformed_batch)
 
     # Save output to JSON
     output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.json"
