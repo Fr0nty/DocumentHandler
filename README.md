@@ -47,3 +47,5 @@ After this split is done, I will try and use the python that handles word docume
 
 ### LangChain method
 Another branch called OCR_Langchain will handle complex text and hopefully make everything work, however the problem resides in the fact that I need an API key for a LLM and I want to see if I can use the one at work or if I need to use my personal keys. Also an OCR was used to help delimit the figures, tables, titles and text.
+* Used my own key for running langchain 
+* The key will be hidden for now

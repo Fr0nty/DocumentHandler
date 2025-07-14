@@ -8,7 +8,6 @@ import io
 
 # Step 1: Extract Text, Figures, and Tables
 def extract_text_from_pdf(pdf_path):
-    print("Starting text extraction from PDF...")
     doc = fitz.open(pdf_path)
     text = ""
     figures = {}
