@@ -49,3 +49,5 @@ After this split is done, I will try and use the python that handles word docume
 Another branch called OCR_Langchain will handle complex text and hopefully make everything work, however the problem resides in the fact that I need an API key for a LLM and I want to see if I can use the one at work or if I need to use my personal keys. Also an OCR was used to help delimit the figures, tables, titles and text.
 * Used my own key for running langchain 
 * The key will be hidden for now
+### Combining OCR, Ollama and rememberance of structure
+I will write on top of the JSON branch another method that will combine OCR and Ollama with the ability to remember the structure of the text tables and figures, this will need to be done so I dont need to use my own keys and to make it work on any PC, wish me luck!
