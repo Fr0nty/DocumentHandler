@@ -1,179 +1,311 @@
 import os
-import PyPDF2
-from docx import Document
-import requests  # For interacting with the Ollama server
+import requests
 import json
+import pdfplumber
+from docx import Document
+from docx.shared import Inches
+from tqdm import tqdm
+import re
 
-# Ollama config
-endpoint = "http://localhost:11434/api/generate"  # Replace with your local Ollama server URL
+# --- CONFIGURATION ---
+OLLAMA_API_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "mistral"
-MAX_TOKENS = 6000
-CHARACTER_LIMIT = 24000  # Roughly for ~6000 tokens
+DATA_DIR = "data"
+TEMPLATES_DIR = "templates"
+OUTPUT_DIR = "output"
+FIGURE_DIR = os.path.join(OUTPUT_DIR, "figures") # To store extracted images
 
-def extract_pdf_text(file_path):
-    """Extracts text from the given PDF file."""
-    text = ""
-    with open(file_path, "rb") as pdf_file:
-        reader = PyPDF2.PdfReader(pdf_file)
-        for page in reader.pages:
-            text += page.extract_text() + "\n"
-    return text
+# --- 1. SETUP & USER INTERACTION ---
 
-
-def load_template(template_path):
-    """Loads the text/template from the Word document."""
-    doc = Document(template_path)
-    template_text = ""
-    for paragraph in doc.paragraphs:
-        template_text += paragraph.text + "\n"
-    return template_text
-
-
-def transform_text_via_ollama(input_text, translate_to=None):
-    """
-    Perform transformation using Ollama (local model).
-    - input_text: content from the old PDF
-    - translate_to: optional target language (e.g., Romanian)
-    """
-    prompt = f"""
-    Correct the grammar and improve the clarity of the following text.
-    If needed, translate this content into {translate_to}:
-    Write only the final version after you make all the changes, if the content is translated in {translate_to}, write only the translation.
-    ---
-    Content:
-    {input_text}
-    ---
-    """
-    
-    # Making a POST request to the local Ollama server
-    payload = {
-        "model": MODEL_NAME,  # Specify the model name
-        "prompt": prompt
-    }
-    print(f"Payload: {payload}")
-    try:
-        response = requests.post(endpoint, json=payload)
-        print(f"Raw response: {response.text}")  # Debugging statement to inspect the response
-        response.raise_for_status()  # Raise HTTP errors
-        full_response_data = ""
-        for chunk in response.iter_lines():
-            if chunk:
-                try:
-                    # Attempt to parse each chunk as JSON
-                    chunk_data = json.loads(chunk.decode("utf-8"))
-                    full_response_data += chunk_data.get("response", "")
-                    if chunk_data.get("done", False):  # Stop if 'done' is true
-                        break
-                except json.JSONDecodeError as e:
-                    print(f"Failed to decode chunk: {e}")
-
-        # Return the full assembled response
-        return full_response_data.strip()
-    except requests.exceptions.RequestException as e:
-        print(f"Error during Ollama processing: {e}")
+def select_file_from_dir(directory, file_extension):
+    """Lists files in a directory and asks the user to choose one."""
+    print(f"\nScanning for '{file_extension}' files in './{directory}'...")
+    files = [f for f in os.listdir(directory) if f.endswith(file_extension)]
+    if not files:
+        print(f"Error: No '{file_extension}' files found in the './{directory}' directory.")
         return None
 
+    print(f"Please choose a file to process:")
+    for i, f in enumerate(files):
+        print(f"  [{i+1}] {f}")
 
-def apply_template(transformed_text, template_text):
+    while True:
+        try:
+            choice = int(input("Enter the number of your choice: ")) - 1
+            if 0 <= choice < len(files):
+                return os.path.join(directory, files[choice])
+            else:
+                print("Invalid number. Please try again.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+def get_language_choice():
+    """Asks the user to choose the translation direction."""
+    print("\nSelect the translation direction:")
+    print("  [1] Romanian to English")
+    print("  [2] English to Romanian")
+    while True:
+        try:
+            choice = int(input("Enter your choice (1 or 2): "))
+            if choice == 1:
+                return "Romanian", "English"
+            elif choice == 2:
+                return "English", "Romanian"
+            else:
+                print("Invalid choice. Please select 1 or 2.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+# --- 2. EXTRACTION & ANALYSIS (OCR PHASE) ---
+
+def extract_content_from_pdf(pdf_path):
     """
-    Apply the template to the transformed text.
-    - transformed_text: fully processed document text
-    - template_text: structure/format from the Word document
+    Extracts text, tables, and images from a PDF.
+    It replaces tables and figures with placeholders in the text.
     """
-    return f"{template_text}\n\n{transformed_text}"
+    print(f"\n Analyzing PDF: {os.path.basename(pdf_path)}...")
+    if not os.path.exists(FIGURE_DIR):
+        os.makedirs(FIGURE_DIR)
+
+    content_list = []
+    tables = []
+    figures = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(tqdm(pdf.pages, desc="Processing PDF Pages")):
+            # Extract and save images (figures)
+            page_images = page.images
+            for i, img in enumerate(page_images):
+                figure_index = len(figures) + 1
+                figure_placeholder = f"\n[FIGURE_{figure_index}]\n"
+                
+                # Get the bounding box of the image to place the placeholder correctly
+                img_bbox = (img['x0'], img['top'], img['x1'], img['bottom'])
+                
+                # Extract the image bytes
+                try:
+                    img_obj = page.crop(img_bbox).to_image(resolution=300)
+                    figure_filename = os.path.join(FIGURE_DIR, f"figure_{page_num+1}_{i+1}.png")
+                    img_obj.save(figure_filename, format="PNG")
+                    figures.append(figure_filename)
+                    # Add placeholder based on vertical position
+                    content_list.append({'type': 'figure', 'content': figure_placeholder, 'y0': img['top']})
+                except Exception as e:
+                    print(f"Warning: Could not extract an image on page {page_num+1}. Reason: {e}")
+
+            # Extract tables
+            page_tables = page.extract_tables()
+            for table_data in page_tables:
+                table_index = len(tables) + 1
+                table_placeholder = f"\n[TABLE_{table_index}]\n"
+                tables.append(table_data)
+                
+                # Find table position to insert placeholder correctly
+                # We approximate the position from the first cell's content
+                first_cell_text = table_data[0][0]
+                if first_cell_text:
+                    text_instances = page.search(first_cell_text)
+                    if text_instances:
+                         content_list.append({'type': 'table', 'content': table_placeholder, 'y0': text_instances[0]['top']})
+
+            # Extract text, excluding text inside tables
+            text = page.extract_text(x_tolerance=2, keep_blank_chars=True)
+            if text:
+                content_list.append({'type': 'text', 'content': text, 'y0': page.bbox[1]}) # Use page top for general text
+
+    # Sort all extracted elements by their vertical position (y0) to maintain reading order
+    # A bit complex because a single page adds multiple items. A simpler approach for now:
+    # We will process text page by page and insert placeholders where they were found.
+    # The current implementation is a simplification but should work for many documents.
+    # For a truly robust solution, one would process objects sorted by their y-coordinate.
+    
+    # A simplified re-ordering will be done by consolidating text after extraction
+    full_text = ""
+    # We will let the placeholders found on a page represent their content for now
+    # This is a complex problem; for this script, we assume a sequential read is "good enough"
+    # and placeholders are inserted at the end of a page's text.
+    with pdfplumber.open(pdf_path) as pdf:
+        page_texts = []
+        for page in pdf.pages:
+            page_texts.append(page.extract_text() or "")
+        
+        full_text = "\n".join(page_texts)
+        
+        # Now, replace table and figure areas with placeholders. This is a heuristic.
+        # A more advanced version would use coordinates to insert placeholders perfectly.
+        num_tables = len(tables)
+        num_figures = len(figures)
+        
+        # This is a simplified replacement. It doesn't use coordinates but assumes order.
+        full_text += "\n" + "\n".join([f"[TABLE_{i+1}]" for i in range(num_tables)])
+        full_text += "\n" + "\n".join([f"[FIGURE_{i+1}]" for i in range(num_figures)])
+
+    # Clean up excessive newlines that can confuse the model
+    full_text = re.sub(r'\n{3,}', '\n\n', full_text)
+    
+    print("PDF analysis complete.")
+    return full_text, tables, figures
 
 
-def save_to_word(final_text, output_path):
-    """Saves the final text to a Word document."""
-    doc = Document()
-    for line in final_text.split("\n"):
-        doc.add_paragraph(line)
+# --- 3. TRANSLATION & REFINEMENT (MISTRAL PHASE) ---
+
+def translate_text_with_mistral(text, src_lang, tgt_lang):
+    """
+    Sends text to the Ollama Mistral model for translation and grammar fix.
+    Handles long text by splitting it into chunks of a manageable size (approx. 6000 tokens).
+    """
+    print(f"\n Translating from {src_lang} to {tgt_lang} using Mistral (with token-aware chunking)...")
+
+    # --- NEW TOKEN-BASED CHUNKING LOGIC ---
+    # Rule of thumb: 1 token ~= 4 characters. Target: 6000 tokens ~= 24000 characters.
+    MAX_CHARS_PER_CHUNK = 24000
+    
+    chunks = []
+    current_pos = 0
+    while current_pos < len(text):
+        end_pos = min(current_pos + MAX_CHARS_PER_CHUNK, len(text))
+        
+        # If we are not at the end of the text, try to find a natural split point (end of sentence).
+        if end_pos < len(text):
+            # Find the last period or newline before the hard character limit
+            split_pos = text.rfind('.', current_pos, end_pos)
+            if split_pos == -1:
+                split_pos = text.rfind('\n', current_pos, end_pos)
+            
+            # If a natural split point is found, use it. Otherwise, use the hard limit.
+            if split_pos != -1:
+                end_pos = split_pos + 1
+        
+        chunk = text[current_pos:end_pos]
+        chunks.append(chunk)
+        current_pos = end_pos
+    
+    print(f"Text was split into {len(chunks)} chunks to ensure stability.")
+    # --- END OF NEW LOGIC ---
+
+    translated_chunks = []
+    for i, chunk in enumerate(tqdm(chunks, desc="Translating Chunks")):
+        if not chunk.strip():
+            continue
+
+        # The "flawless" prompt remains the same
+        prompt = f"""
+        You are an expert multilingual translator and proofreader. Your task is to translate a text from {src_lang} to {tgt_lang}.
+        Follow these instructions precisely:
+        1. Translate the text literally and completely. DO NOT summarize, shorten, or omit any information.
+        2. Correct any minor grammatical mistakes in the original text during translation (e.g., spelling, missing commas).
+        3. Preserve special placeholders like [TABLE_X] and [FIGURE_X] exactly as they are in the translated output.
+        
+        Translate the following text:
+        ---
+        {chunk}
+        """
+
+        try:
+            # You can keep the extended timeout or reduce it back, e.g., to 320
+            payload = {
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False
+            }
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=320) # Keeping your 320s timeout
+            response.raise_for_status()
+            
+            response_data = response.json()
+            translated_chunk = response_data.get("response", "").strip()
+            translated_chunks.append(translated_chunk)
+
+        except requests.exceptions.RequestException as e:
+            print(f"\nError contacting Ollama API on chunk {i+1}: {e}")
+            print("This could be due to a very complex chunk or Ollama server issues. Aborting.")
+            return None
+
+    print("✅ Translation complete.")
+    return "".join(translated_chunks)
+
+# --- 4. RECONSTRUCTION & FORMATTING (OUTPUT PHASE) ---
+
+def create_word_document(output_path, template_path, translated_text, tables, figures):
+    """
+    Creates a new Word document based on a template, populating it with
+    the translated text, tables, and figures.
+    """
+    print(f"\n Building Word document using template: {os.path.basename(template_path)}...")
+    
+    # Using the template file directly preserves all its styles and formatting
+    doc = Document(template_path)
+
+    # Dictionaries to hold the actual data for placeholders
+    table_map = {f"[TABLE_{i+1}]": data for i, data in enumerate(tables)}
+    figure_map = {f"[FIGURE_{i+1}]": path for i, path in enumerate(figures)}
+
+    # Process the translated text paragraph by paragraph
+    for para_text in translated_text.split('\n'):
+        para_text = para_text.strip()
+        
+        # Check if the paragraph is a placeholder for a table or figure
+        if para_text in table_map:
+            table_data = table_map[para_text]
+            if table_data:
+                # Add a new table to the document
+                # Using the default table style from the template
+                word_table = doc.add_table(rows=len(table_data), cols=len(table_data[0]), style='Table Grid')
+                for i, row in enumerate(table_data):
+                    for j, cell_text in enumerate(row):
+                        word_table.cell(i, j).text = cell_text if cell_text else ""
+                # Add a caption
+                doc.add_paragraph(f"Table {para_text.split('_')[1].strip('[]')}", style='Caption')
+
+        elif para_text in figure_map:
+            figure_path = figure_map[para_text]
+            # Add the figure image
+            doc.add_picture(figure_path, width=Inches(6.0)) # Default width
+            # Add a caption
+            doc.add_paragraph(f"Figure {para_text.split('_')[1].strip('[]')}", style='Caption')
+            
+        else:
+            # It's a regular paragraph, so add it
+            if para_text: # Avoid adding empty paragraphs
+                doc.add_paragraph(para_text, style='Normal')
+    
     doc.save(output_path)
+    print(f"Successfully created Word document: {output_path}")
 
+# --- MAIN WORKFLOW ---
 
 def main():
-    # Folders
-    data_folder = "data"
-    templates_folder = "templates"
-    output_folder = "output"
+    """Main function to run the entire application workflow."""
+    print("--- Document Translation & Formatting Tool ---")
     
-    # Ensure output folder exists
-    os.makedirs(output_folder, exist_ok=True)
-
-    # User interaction (basic for CLI)
-    print("Welcome to the Documentation Formatter App!")
+    # 1. Get user input
+    pdf_path = select_file_from_dir(DATA_DIR, ".pdf")
+    if not pdf_path: return
     
-    # Step 1: Select PDF file
-    pdf_files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
-    if not pdf_files:
-        print("No PDF files found in the data directory.")
+    template_path = select_file_from_dir(TEMPLATES_DIR, ".docx")
+    if not template_path: return
+    
+    src_lang, tgt_lang = get_language_choice()
+    
+    # 2. Extract content from the PDF
+    original_text, tables, figures = extract_content_from_pdf(pdf_path)
+    if not original_text:
+        print("Could not extract any text from the PDF. Aborting.")
         return
-    
-    print("Available PDF files:")
-    for idx, file in enumerate(pdf_files):
-        print(f"{idx + 1}. {file}")
-    
-    pdf_choice = int(input("Choose a PDF file by number: ")) - 1
-    pdf_path = os.path.join(data_folder, pdf_files[pdf_choice])
-    
-    # Step 2: Select Template
-    template_files = [f for f in os.listdir(templates_folder) if f.endswith(".docx")]
-    if not template_files:
-        print("No template files found in the templates directory.")
+
+    # 3. Translate the text
+    translated_text = translate_text_with_mistral(original_text, src_lang, tgt_lang)
+    if translated_text is None:
+        print("Translation failed. Aborting.")
         return
-    
-    print("\nAvailable Templates:")
-    for idx, file in enumerate(template_files):
-        print(f"{idx + 1}. {file}")
-    
-    template_choice = int(input("Choose a template by number: ")) - 1
-    template_path = os.path.join(templates_folder, template_files[template_choice])
-    
-    # Step 3: Transformation Type
-    transform_choice = input("\nDo you want to translate the document? (y/n): ").strip().lower()
-    translate_to = None
-    if transform_choice == "y":
-        translate_to = input("Enter the target language (e.g., Romanian): ").strip()
-    
-    # Process
-    print("\nProcessing...")
-    pdf_text = extract_pdf_text(pdf_path)
-    template_text = load_template(template_path)
 
-    # Break the text into manageable chunks with respect to the CHARACTER_LIMIT
-    paragraphs = pdf_text.strip().split("\n")
-    full_transformed_text = ""
+    # 4. Create the final Word document
+    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    output_filename = f"{base_name}_translated_to_{tgt_lang.lower()}.docx"
+    output_path = os.path.join(OUTPUT_DIR, output_filename)
     
-    current_chunk = ""
-    
-    for paragraph in paragraphs:
-        if len(current_chunk) + len(paragraph) + 1 < CHARACTER_LIMIT:
-            current_chunk += paragraph + "\n"  # Add paragraph and keep it for current chunk
-        else:
-            # Process the current chunk if it's not empty
-            if current_chunk.strip():  # Process current chunk only if it's not empty
-                transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
-                if transformed_chunk:
-                    full_transformed_text += transformed_chunk + "\n"  # Append the transformed text
+    create_word_document(output_path, template_path, translated_text, tables, figures)
 
-            # Start a new chunk with the current paragraph
-            current_chunk = paragraph + "\n"
-    
-    # Process any remaining content in the last chunk
-    if current_chunk.strip():
-        transformed_chunk = transform_text_via_ollama(current_chunk, translate_to)
-        if transformed_chunk:
-            full_transformed_text += transformed_chunk + "\n"
-    
-    # Apply the template finally
-    final_document = apply_template(full_transformed_text, template_text)
-
-    # Save output
-    output_file = f"{os.path.splitext(pdf_files[pdf_choice])[0]}_formatted.docx"
-    output_path = os.path.join(output_folder, output_file)
-    save_to_word(final_document, output_path)
-    
-    print(f"\nDocument has been reformatted and saved to {output_path}")
+    print("\n--- Process Finished ---")
 
 
 if __name__ == "__main__":

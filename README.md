@@ -39,3 +39,6 @@ The data folder will see your inputs, meaning the files that need to be processe
 
 ## Issues and how to overcome
 After adressing the previous issues, the code works both on translation and grammar fixing, now the real challenge is to make it rewrite it into the specific template format, there might be need for additional processing by a multi modal model like llava to realize the paper layout with both the figures and tables, as well as the text positioning, remains to be tested and seen what solution might work.
+
+## Splitting the tasks
+Trying to solve everything at once is not proving to be a good exercise so I started working on another main that extracts the diagrams and figures from the pdf file using OpenCV, the results for now prove to be pretty decent, however it still has place for improvement as it doesnt extract the signatures correctly and some diagrams are cutout
